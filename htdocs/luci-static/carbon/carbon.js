@@ -486,8 +486,18 @@
 		};
 		const inside = (node) => !!node && ((list && list.contains(node)) || el.contains(node) || (opener && opener.contains(node)));
 		const outside = (e) => { if (!inside(e.target)) close(false); };
-		/* page scroll or resize closes the list; scrolling inside it does not */
-		const dismiss = (e) => { if (!(e && e.type === 'scroll' && list && list.contains(e.target))) close(false); };
+		/* page scroll or resize closes the list; scrolling inside it does not,
+		   nor does a scroll that leaves the trigger in place (scroll anchoring
+		   when a card above refreshes, a late event from the opening tap) */
+		let anchorAt = null;
+		const anchorMoved = () => {
+			const r = opener ? opener.getBoundingClientRect() : null;
+			return !r || !anchorAt || Math.abs(r.top - anchorAt.top) > 1 || Math.abs(r.left - anchorAt.left) > 1;
+		};
+		const dismiss = (e) => {
+			if (e && e.type === 'scroll' && list && (list.contains(e.target) || !anchorMoved())) return;
+			close(false);
+		};
 
 		function open(o) {
 			o = o || {};
@@ -509,6 +519,7 @@
 			list.addEventListener('focusout', (e) => { if (!inside(e.relatedTarget)) close(false); });
 			document.body.appendChild(list);
 			place(o.anchor || el, !!o.beside);
+			anchorAt = opener.getBoundingClientRect();
 			list.classList.add('show');
 			el.setAttribute('aria-expanded', 'true');
 			highlight(o.last ? opts.options.length - 1 : Math.max(0, index(value)));

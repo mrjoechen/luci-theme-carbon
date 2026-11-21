@@ -225,6 +225,18 @@
 		palette: '<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.1 0 1.7-.8 1.7-1.6 0-.5-.2-.9-.5-1.2-.3-.4-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8h2.1a3.9 3.9 0 0 0 3.9-3.9C20.5 6.8 16.7 3.5 12 3.5z"/><circle cx="7.6" cy="11.2" r="1.15" fill="currentColor" stroke="none"/><circle cx="10.2" cy="7.4" r="1.15" fill="currentColor" stroke="none"/><circle cx="14.6" cy="7.4" r="1.15" fill="currentColor" stroke="none"/>',
 		layers: '<path d="M12 4l8.5 4.3L12 12.6 3.5 8.3z"/><path d="M3.5 12.2L12 16.5l8.5-4.3"/><path d="M3.5 16L12 20.3l8.5-4.3"/>',
 		fiber: '<path d="M3 19.5c3 0 4.2-2.2 5.2-4.3S10.6 11 13.5 11H15"/><rect x="15" y="8.5" width="4" height="5" rx="1.2"/><path d="M19 11h2.5M19.8 7.2l1.6-1.6M19.8 14.8l1.6 1.6"/>',
+		/* cone-shaped NAT gateway with opposing flow arrows */
+		flowcone: '<path d="M4.5 4.5h15l-5.1 6.5v7.3l-4.8 2.2v-9.5z"/>' +
+			'<path d="M7.4 8.3h8.2M13.8 6.5l1.8 1.8-1.8 1.8"/>' +
+			'<path d="M16.6 17.2H8.4M10.2 15.4l-1.8 1.8 1.8 1.8"/>',
+		/* proxy activity: one node on a forwarding pulse */
+		honk: '<path d="M3.5 12h3l2-5 3.5 10 2.5-8 1.8 3h4.2"/>' +
+			'<circle cx="19.5" cy="6" r="1.6"/>',
+		/* processor distributing interrupts to four directions */
+		irqbalance: '<rect x="8" y="7" width="8" height="10" rx="2"/>' +
+			'<circle cx="12" cy="12" r="1.5"/>' +
+			'<path d="M8 10H3.5M5.5 8 3.5 10l2 2M16 10h4.5M18.5 8l2 2-2 2"/>' +
+			'<path d="M8 15H4.5M6.5 13l-2 2 2 2M16 15h3.5M17.5 13l2 2-2 2"/>',
 		send: '<path d="M20.5 3.5L10.2 13.8"/><path d="M20.5 3.5l-6.3 17-4-6.7-6.7-4z"/>',
 		cloud: '<path d="M7.2 18.5h9.8a4 4 0 0 0 .7-7.9 5.6 5.6 0 0 0-10.8-1.2A4.6 4.6 0 0 0 7.2 18.5z"/>',
 		zap: '<path d="M13.2 3L5 13.5h6.2L10.5 21l8.5-10.5h-6.2z"/>',
@@ -267,7 +279,7 @@
 		network: 'ports', wireless: 'wifi', dhcp: 'list', dns: 'server', hosts: 'tag', diagnostics: 'search',
 		firewall: 'shield', switch: 'ports', 'switch-vlan': 'layers', vlan: 'layers', pon: 'fiber',
 		gpon: 'fiber', xpon: 'fiber', sqm: 'sliders', qos: 'sliders', eqos: 'sliders', mwan3: 'route',
-		turboacc: 'zap', flowoffload: 'zap',
+		turboacc: 'zap', flowoffload: 'zap', flowcone: 'flowcone',
 		/* services */
 		ddns: 'refresh', upnp: 'link', wol: 'power', samba4: 'folder', samba: 'folder', ksmbd: 'folder',
 		nfs: 'folder', vsftpd: 'folder', adblock: 'shield', adguardhome: 'shield', smartdns: 'server',
@@ -280,7 +292,7 @@
 		watchcat: 'eye', diskman: 'disk', 'hd-idle': 'disk', dockerman: 'docker', docker: 'docker',
 		vlmcsd: 'key', ua2f: 'shield', accesscontrol: 'filter', timecontrol: 'clock', p910nd: 'printer',
 		usb_printer: 'printer', alist: 'folder', 'ddns-go': 'refresh', wechatpush: 'bell', serverchan: 'bell',
-		pushbot: 'bell'
+		pushbot: 'bell', honk: 'honk', irqbalance: 'irqbalance'
 	};
 	const PAGE_KEYWORDS = [
 		[/plugin|addon|extension/, 'puzzle'], [/theme|argon|design|kucat|skin/, 'palette'],

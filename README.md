@@ -53,7 +53,7 @@ https://github.com/user-attachments/assets/d6d8d161-65fa-456c-acbc-d3b2c0737bd9
 | OpenWrt / ImmortalWrt 23.05, 24.10 | opkg | `.ipk` or install script |
 | OpenWrt / ImmortalWrt 25.x, snapshot | apk | `.apk` or install script |
 
-Requires the ucode-based LuCI (23.05 or newer).
+Requires the ucode-based LuCI (23.05 or newer). The same `.ipk` package and online updater work on OpenWrt 23.05 (including stock 23.05 BusyBox without `setsid` and 23.05 SDK builds) and 24.10.
 
 All files are on the [Releases](https://github.com/mrjoechen/luci-theme-carbon/releases/latest) page.
 
@@ -134,7 +134,7 @@ APK updates verify the bundled Carbon public key, then use APK's normal signatur
 
 If GitHub downloads are slow or blocked, enter an HTTPS **Download mirror** prefix on the same page. Only the package bytes use the mirror; version, size and SHA-256 still come from GitHub, and the updater falls back to GitHub if the mirror fails.
 
-Required packages: `curl`, `ca-bundle`, `flock` (installed as native package dependencies). Installs made with `--files` or with installers before v1.1.3 are not registered with apk/opkg; run the current `carbon-install.sh` once to enable online updates.
+Required packages: `curl`, `ca-bundle`, `flock` (installed as native package dependencies; `setsid` is not required on OpenWrt 23.05). OpenWrt 23.05 SDK packages whose versions omit the `-r` prefix (such as `1.1.8-1`) are also recognised and can upgrade cleanly to official `-rN` releases. Installs made with `--files` or with installers before v1.1.3 are not registered with apk/opkg; run the current `carbon-install.sh` once to enable online updates.
 
 ### Uninstall
 
@@ -156,7 +156,7 @@ sh scripts/build-installer.sh
 sh scripts/build-ipk.sh
 ```
 
-**With the OpenWrt SDK**: put this directory under `package/` and run `make package/luci-theme-carbon/compile`.
+**With the OpenWrt SDK**: put this directory under `package/` and run `make package/luci-theme-carbon/compile` (supports 23.05 / 24.10 `opkg` and 25.x `apk` SDKs; 23.05 `-1` revisions are handled consistently by the installer and online updater).
 
 **APK signing**: raw SDK APKs are unsigned. See [signing setup and validation](docs/apk-signing.md) for local signing and the `APK_SIGNING_KEY` Actions secret required for releases.
 

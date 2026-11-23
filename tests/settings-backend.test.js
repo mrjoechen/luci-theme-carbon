@@ -225,3 +225,169 @@ test('settings ACL grants write access to set_dashboard only under luci.carbon_u
 	assert.ok(acl.write.ubus['luci.carbon_update'].includes('set_dashboard'));
 	assert.equal(acl.read.ubus['luci.carbon_update'].includes('set_dashboard'), false);
 });
+
+function updaterEnv({ withSetsid = false, manager = 'opkg', installedVersion = '1.1.8-1' } = {}) {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-updater-'));
+	const bin = path.join(dir, 'bin');
+	fs.mkdirSync(bin);
+	const log = path.join(dir, 'calls.log');
+	fs.writeFileSync(log, '');
+	const makeStub = (name, content) => {
+		const p = path.join(bin, name);
+		fs.writeFileSync(p, content);
+		fs.chmodSync(p, 0o755);
+	};
+	// Copy or link standard POSIX utilities needed by the script, explicitly controlling setsid/flock/curl/sha256sum.
+	for (const cmd of ['sh', 'awk', 'sed', 'grep', 'cat', 'cp', 'mv', 'rm', 'mkdir', 'chmod', 'ls', 'head', 'tail', 'tr', 'wc', 'df', 'date', 'mktemp', 'sort']) {
+		for (const sysdir of ['/bin', '/usr/bin']) {
+			const src = path.join(sysdir, cmd);
+			if (fs.existsSync(src)) { fs.symlinkSync(src, path.join(bin, cmd)); break; }
+		}
+	}
+	makeStub('curl', '#!/bin/sh\necho "curl $*" >> "' + log + '"\nexit 0\n');
+	makeStub('sha256sum', '#!/bin/sh\necho "0000  $1"\n');
+	makeStub('flock', '#!/bin/sh\necho "flock $*" >> "' + log + '"\nexit 0\n');
+	if (withSetsid) {
+		makeStub('setsid', '#!/bin/sh\necho "setsid $*" >> "' + log + '"\nexec "$@"\n');
+	}
+	if (manager === 'opkg') {
+		// Mirror real OpenWrt 23.05 opkg compare-versions: without normalizing -N to -rN,
+		// opkg treats -r1 as greater than -1 and -2 because letters sort after digits.
+		makeStub('opkg', `#!/bin/sh
+echo "opkg $*" >> "${log}"
+case "$1" in
+	status)
+		printf 'Package: luci-theme-carbon\\nVersion: %s\\nStatus: install user installed\\n' "${installedVersion}"
+		;;
+	compare-versions)
+		a=$2; op=$3; b=$4
+		[ "$op" = ">>" ] || exit 2
+		if [ "$a" = "$b" ]; then exit 1; fi
+		# Emulate Debian/opkg revision ordering: non-digit 'r' > digit when upstream matches.
+		av=\${a%-*}; ar=\${a#*-}; bv=\${b%-*}; br=\${b#*-}
+		if [ "$av" != "$bv" ]; then
+			[ "$(printf '%s\\n%s\\n' "$av" "$bv" | sort -V | tail -n 1)" = "$av" ]
+			exit $?
+		fi
+		case "$ar:$br" in
+			r*:r*) [ "\${ar#r}" -gt "\${br#r}" ] ;;
+			r*:*) exit 0 ;;
+			*:r*) exit 1 ;;
+			*:*) [ "$ar" -gt "$br" ] ;;
+		esac
+		;;
+esac
+`);
+	}
+	const body = SCRIPT
+		.replace('. /usr/share/libubox/jshn.sh', `. "${JSHN}"`)
+		.replace(/\ncase "\$1" in\n\tlist\)[\s\S]*$/, '\n');
+	const lib = path.join(dir, 'backend.sh');
+	fs.writeFileSync(lib, body + `\nstate_dir="${dir}/state"\nmkdir -p "$state_dir"\n`);
+	const run = (snippet) => execFileSync(process.env.CARBON_TEST_SH || 'sh', ['-c', `. "${lib}"; ${snippet}`], {
+		encoding: 'utf8',
+		env: { PATH: bin }
+	});
+	return { dir, bin, log, run, readLog: () => fs.readFileSync(log, 'utf8') };
+}
+
+test('tools_ready and start_job work without setsid (OpenWrt 23.05) while preserving setsid when present', () => {
+	const noSetsid = updaterEnv({ withSetsid: false, installedVersion: '1.1.8-r1' });
+	const withSetsid = updaterEnv({ withSetsid: true, installedVersion: '1.1.8-r1' });
+	try {
+		assert.equal(noSetsid.run('manager=opkg; tools_ready && echo READY || echo MISSING').trim(), 'READY');
+
+		const patchScript = (env) => {
+			const scriptCopy = path.join(env.dir, 'rpc.sh');
+			fs.writeFileSync(scriptCopy, SCRIPT
+				.replace('. /usr/share/libubox/jshn.sh', `. "${JSHN}"`)
+				.replace('state_dir=/tmp/carbon-update', `state_dir="${env.dir}/state"`)
+				.replace('[ "$(ls -nd "$state_dir" | awk \'{print $3}\')" = 0 ] && ', '')
+				.replace('check_release() {', 'check_release() { echo "RAN_CHECK" > "' + env.dir + '/worker.ran"; return 0; }\norig_check_release() {'));
+			fs.chmodSync(scriptCopy, 0o755);
+			return scriptCopy;
+		};
+
+		const waitWorkerDone = (env) => {
+			const marker = path.join(env.dir, 'worker.ran');
+			const stateDir = path.join(env.dir, 'state');
+			const statusFile = path.join(stateDir, 'status.json');
+			for (let i = 0; i < 60; i++) {
+				const done = fs.existsSync(marker) &&
+					fs.existsSync(statusFile) &&
+					fs.readFileSync(statusFile, 'utf8').includes('"state":"idle"') &&
+					!fs.readdirSync(stateDir).some(name => name.startsWith('job.'));
+				if (done) return true;
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+			}
+			return false;
+		};
+
+		const rpcNoSetsid = patchScript(noSetsid);
+		const outNoSetsid = execFileSync(rpcNoSetsid, ['call', 'check'], { input: '{}', encoding: 'utf8', env: { PATH: noSetsid.bin } });
+		assert.deepEqual(JSON.parse(outNoSetsid), { started: true });
+		assert.equal(waitWorkerDone(noSetsid), true, 'detached worker should complete and clean up without setsid');
+
+		const rpcWithSetsid = patchScript(withSetsid);
+		const outWithSetsid = execFileSync(rpcWithSetsid, ['call', 'check'], { input: '{}', encoding: 'utf8', env: { PATH: withSetsid.bin } });
+		assert.deepEqual(JSON.parse(outWithSetsid), { started: true });
+		assert.equal(waitWorkerDone(withSetsid), true, 'worker with setsid should complete and clean up');
+		assert.match(withSetsid.readLog(), /setsid /, 'existing 24.10/25.12 path still uses setsid when available');
+	} finally {
+		fs.rmSync(noSetsid.dir, { recursive: true, force: true });
+		fs.rmSync(withSetsid.dir, { recursive: true, force: true });
+	}
+});
+
+test('opkg recognizes OpenWrt 23.05 SDK versions without -r prefix and compares revisions accurately', () => {
+	const env = updaterEnv({ installedVersion: '1.1.8-1' });
+	try {
+		assert.equal(env.run('installed; printf "%s %s %s" "$manager" "$managed" "$current"'), 'opkg 1 1.1.8-1');
+
+		const cases = [
+			['1.1.8-r1', '1.1.8-1', false],
+			['1.1.8-r1', '1.1.8-2', false],
+			['1.1.7-r1', '1.1.8-1', false],
+			['1.1.8-r2', '1.1.8-1', true],
+			['1.1.9-r1', '1.1.8-1', true],
+			['1.1.9-r1', '1.1.8-r1', true],
+			['1.1.8-r1', '1.1.8-r1', false],
+			['1.1.8-1', '1.1.7-1', false], // release target must still strictly use -rN
+		];
+		for (const [target, current, expected] of cases) {
+			const res = env.run(`manager=opkg; target='${target}'; current='${current}'; newer && echo YES || echo NO`).trim();
+			assert.equal(res, expected ? 'YES' : 'NO', `target=${target} current=${current}`);
+		}
+
+		// APK remains strict: versions without -r are never accepted as managed APK installs
+		assert.equal(env.run(`manager=apk; valid_installed_version '1.1.8-1' && echo YES || echo NO`).trim(), 'NO');
+		assert.equal(env.run(`manager=apk; valid_installed_version '1.1.8-r1' && echo YES || echo NO`).trim(), 'YES');
+	} finally {
+		fs.rmSync(env.dir, { recursive: true, force: true });
+	}
+});
+
+test('settings view treats 23.05 SDK 1.1.8-1 as matching latest 1.1.8-r1', () => {
+	const nodes = [];
+	function E(tag, attrs = {}, children) {
+		const node = { tag, attrs, children, hidden: false, disabled: false, textContent: '', innerHTML: '' };
+		nodes.push(node);
+		return node;
+	}
+	const renderState = (data) => {
+		nodes.length = 0;
+		const subject = new Function('view', 'rpc', 'poll', 'ui', 'markdown', 'document', 'E', 'L', 'window', '_',
+			fs.readFileSync(path.join(__dirname, '..', 'htdocs/luci-static/resources/view/system/carbon-update.js'), 'utf8'))(
+			{ extend: v => v }, { declare: () => async () => data }, { add() {} }, {}, { render: s => s },
+			{ documentElement: { lang: 'en' }, querySelectorAll: () => [] }, E, { hasViewPermission: () => true }, {}, s => s);
+		subject.render(data);
+		const statusP = nodes.find(n => n.tag === 'p' && n.attrs && n.attrs.role === 'status');
+		return statusP && statusP.textContent;
+	};
+	assert.equal(renderState({ current: '1.1.8-1', latest: '1.1.8-r1', manager: 'opkg', state: 'idle', can_upgrade: false }),
+		'You are using the latest version.');
+	assert.equal(renderState({ current: '1.1.8-r1', latest: '1.1.8-r1', manager: 'opkg', state: 'idle', can_upgrade: false }),
+		'You are using the latest version.');
+	assert.equal(renderState({ current: '1.1.7-1', latest: '1.1.8-r1', manager: 'opkg', state: 'idle', can_upgrade: true }),
+		'A new version is available.');
+});

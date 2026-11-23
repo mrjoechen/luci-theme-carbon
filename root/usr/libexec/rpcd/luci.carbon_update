@@ -25,6 +25,14 @@ mirror_prefix() {
 	valid_mirror "$mirror" || mirror=''
 }
 valid_version() { [ "${#1}" -le 40 ] && printf '%s\n' "$1" | grep -Eq '^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}-r[0-9]{1,6}$'; }
+valid_installed_version() {
+	if [ "$manager" = opkg ]; then
+		[ "${#1}" -le 40 ] && printf '%s\n' "$1" | grep -Eq '^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}-r?[0-9]{1,6}$'
+	else
+		valid_version "$1"
+	fi
+}
+norm_opkg_version() { printf '%s\n' "$1" | sed 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)-\([0-9][0-9]*\)$/\1-r\2/'; }
 prepare() {
 	[ ! -L "$state_dir" ] && mkdir -p "$state_dir" &&
 	[ "$(ls -nd "$state_dir" | awk '{print $3}')" = 0 ] && chmod 700 "$state_dir"
@@ -45,19 +53,19 @@ installed() {
 		manager=opkg
 		current=$(opkg_call status "$package_name" 2>/dev/null | awk '/^Version: / {v=$2} /^Status: .* installed$/ {ok=1} END {if(ok) print v}')
 	fi
-	if valid_version "$current"; then managed=1
+	if valid_installed_version "$current"; then managed=1
 	else current=$(cat /usr/share/carbon/version 2>/dev/null); fi
 }
 newer() {
-	valid_version "$target" && valid_version "$current" || return 1
+	valid_version "$target" && valid_installed_version "$current" || return 1
 	case "$manager" in
 		apk) [ "$(apk version -t "$target" "$current" 2>/dev/null)" = '>' ] ;;
-		opkg) opkg_call compare-versions "$target" '>>' "$current" ;;
+		opkg) opkg_call compare-versions "$target" '>>' "$(norm_opkg_version "$current")" ;;
 		*) return 1 ;;
 	esac
 }
 tools_ready() {
-	for tool in curl flock sha256sum setsid; do command -v "$tool" >/dev/null 2>&1 || return 1; done
+	for tool in curl flock sha256sum; do command -v "$tool" >/dev/null 2>&1 || return 1; done
 	[ "$manager" != apk ] || [ -s "$key_dir/carbon-apk.pem" ]
 }
 load_release() {
@@ -222,7 +230,12 @@ start_job() {
 	cp "$0" "$job/worker" && chmod 700 "$job/worker" || { error_reply space; return; }
 	case "$1" in check) write_status checking ;; upgrade) write_status downloading ;; esac
 	# Keep the inherited flock until the worker exits, even across rpcd reloads.
-	setsid "$job/worker" worker "$1" "${requested:-}" </dev/null >"$job/log" 2>&1 &
+	# OpenWrt 23.05's default BusyBox omits setsid; fall back to a HUP-immune subshell.
+	if command -v setsid >/dev/null 2>&1; then
+		setsid "$job/worker" worker "$1" "${requested:-}" </dev/null >"$job/log" 2>&1 &
+	else
+		( trap '' HUP; "$job/worker" worker "$1" "${requested:-}" </dev/null >"$job/log" 2>&1 & )
+	fi
 	json_init; json_add_boolean started 1; json_dump
 }
 

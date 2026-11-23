@@ -65,4 +65,4 @@ Publish version tags matching `Makefile`; GitHub Release asset names must remain
 
 Run `python tests/update-integration.py` with Docker to test the production RPC script against OpenWrt's real APK manager, disposable signed packages and deterministic download fixtures. Signing and installation are never mocked. This suite checks bad signatures, bad checksums, incorrect metadata, network errors, expired requests, downgrades, concurrency, progress recovery, configuration preservation, mirror validation and fallback from a failing or tampered mirror.
 
-Run `python tests/opkg-update.py` for the native OpenWrt 24.10 IPK upgrade regression, including legacy removal hooks that reset the theme. Both suites run before Release publication.
+Run `python tests/opkg-update.py` for the native OpenWrt 23.05 and 24.10 IPK upgrade regressions, including detached workers without `setsid`, 23.05 SDK `-1` package revisions and legacy removal hooks that reset the theme. Both suites run before Release publication.

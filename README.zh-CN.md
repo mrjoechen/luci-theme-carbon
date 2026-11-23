@@ -50,7 +50,7 @@ https://github.com/user-attachments/assets/b78ccf2b-679e-459b-88ea-b4f82da6e03f
 | OpenWrt / ImmortalWrt 23.05、24.10 | opkg | `.ipk` 或安装脚本 |
 | OpenWrt / ImmortalWrt 25.x、snapshot | apk | `.apk` 或安装脚本 |
 
-需要 ucode 版 LuCI（23.05 及以后）。
+需要 ucode 版 LuCI（23.05 及以后）。同一个 `.ipk` 包和在线升级器均适用于 OpenWrt 23.05（含无 `setsid` 的官方默认 BusyBox 与 23.05 SDK 构建包）及 24.10。
 
 所有文件都在 [Releases](https://github.com/mrjoechen/luci-theme-carbon/releases/latest) 页面。
 
@@ -131,7 +131,7 @@ APK 在线更新先使用包内固定的 Carbon 公钥验证，再由 APK 包管
 
 GitHub 下载缓慢或无法访问时，可在同一页面填写 HTTPS **下载镜像**前缀。镜像只用于下载安装包，版本、大小和 SHA-256 仍以 GitHub 为准；镜像失败时自动改用 GitHub。
 
-依赖 `curl`、`ca-bundle`、`flock`，使用原生包安装时自动处理。使用 `--files` 或 v1.1.3 之前的安装脚本安装的主题没有登记到 apk/opkg，重新运行一次当前的 `carbon-install.sh` 即可启用在线升级。
+依赖 `curl`、`ca-bundle`、`flock`，使用原生包安装时自动处理（OpenWrt 23.05 不要求 `setsid`）。通过 OpenWrt 23.05 SDK 构建、版本号不含 `-r` 前缀的包（如 `1.1.8-1`）也能被正常识别并在线升级到正式 `-rN` 版本。使用 `--files` 或 v1.1.3 之前的安装脚本安装的主题没有登记到 apk/opkg，重新运行一次当前的 `carbon-install.sh` 即可启用在线升级。
 
 ### 卸载
 
@@ -153,7 +153,7 @@ sh scripts/build-installer.sh
 sh scripts/build-ipk.sh
 ```
 
-**使用 OpenWrt SDK**：把本目录放到 SDK 的 `package/` 下，执行 `make package/luci-theme-carbon/compile`。
+**使用 OpenWrt SDK**：把本目录放到 SDK 的 `package/` 下，执行 `make package/luci-theme-carbon/compile`（支持 23.05 / 24.10 `opkg` 与 25.x `apk` SDK；安装脚本与在线升级器均兼容 23.05 的无 `-r` 修订号）。
 
 **APK 签名**：SDK 原始 APK 未签名；本地签名方法、验证步骤和发布所需的 `APK_SIGNING_KEY` Actions Secret 见 [签名构建说明](docs/apk-signing.md)。
 

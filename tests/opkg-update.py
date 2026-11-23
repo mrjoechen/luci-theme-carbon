@@ -54,7 +54,7 @@ class OpkgUpgrade(unittest.TestCase):
                'sh', '-c', 'apk add --no-cache tar && sh /source/scripts/build-ipk.sh /out')
         cls.content = (OUT / cls.name).read_bytes()
 
-    def run_upgrade(self, image, legacy_version, expect_setsid):
+    def run_upgrade(self, image, legacy_version, expect_setsid, fallback_to_pages=False):
         make_ipk(
             OUT / f'legacy-{legacy_version}.ipk',
             legacy_version,
@@ -87,20 +87,35 @@ while [ "$#" -gt 0 ]; do
  shift
 done
 case "$url" in
- */releases/latest) cp /tmp/release.json "$out" ;;
- *.ipk) cp /source/.cache/opkg-update/''' + self.name + ''' "$out" ;;
+ https://api.github.com/repos/mrjoechen/luci-theme-carbon/releases/latest) [ ! -f /tmp/github-fail ] || exit 22; cp /tmp/release.json "$out" ;;
+ https://github.com/mrjoechen/luci-theme-carbon/releases/download/v*/luci-theme-carbon_*_all.ipk) [ ! -f /tmp/github-fail ] || exit 28; cp /source/.cache/opkg-update/''' + self.name + ''' "$out" ;;
+ https://mrjoechen.github.io/luci-theme-carbon/updates/latest.json) cp /tmp/release.json "$out" ;;
+ https://mrjoechen.github.io/luci-theme-carbon/updates/v*/luci-theme-carbon_*_all.ipk) cp /source/.cache/opkg-update/''' + self.name + ''' "$out" ;;
  *) exit 22 ;;
 esac
 ''')
             shell('chmod 755 /usr/bin/curl; touch /etc/config/luci; uci -q get luci.main >/dev/null || uci set luci.main=core; uci set luci.main.lang=zh_cn; uci set luci.main.mediaurlbase=/luci-static/carbon; uci commit luci')
+            if fallback_to_pages:
+                shell('touch /tmp/github-fail')
             before = shell('uci show luci.main')
             initial = rpc('status')
             self.assertEqual((initial['current'], initial['reason']), (legacy_version, ''), initial)
             self.assertTrue(rpc('check')['started'])
-            self.assertTrue(wait()['can_upgrade'])
+            checked = wait()
+            self.assertTrue(checked['can_upgrade'], checked)
+            if fallback_to_pages:
+                self.assertIn('Checking release from pages', checked['log'])
+            else:
+                self.assertIn('Checking release from github', checked['log'])
+                self.assertNotIn('Checking release from pages', checked['log'])
             self.assertTrue(rpc('upgrade', dict(version=self.fullversion))['started'])
             result = wait()
             self.assertEqual((result['state'], result['current']), ('success', self.fullversion), result)
+            if fallback_to_pages:
+                self.assertIn('Downloading from pages', result['log'])
+            else:
+                self.assertIn('Downloading from github', result['log'])
+                self.assertNotIn('Downloading from pages', result['log'])
             self.assertEqual(shell('uci show luci.main'), before)
             self.assertNotIn('syntax error', result['log'])
             self.assertFalse(result['can_upgrade'])
@@ -109,6 +124,9 @@ esac
 
     def test_legacy_hook_does_not_reset_preferences_24_10(self):
         self.run_upgrade(IMAGES['24.10'], '1.0.0-r1', expect_setsid=True)
+
+    def test_openwrt_24_10_pages_fallback_when_github_fails(self):
+        self.run_upgrade(IMAGES['24.10'], '1.0.0-r1', expect_setsid=True, fallback_to_pages=True)
 
     def test_openwrt_23_05_upgrades_without_setsid_and_from_sdk_version(self):
         self.run_upgrade(IMAGES['23.05'], '1.0.0-1', expect_setsid=False)
@@ -141,7 +159,8 @@ while [ "$#" -gt 0 ]; do
  shift
 done
 case "$url" in
- */releases/latest) cp /tmp/release.json "$out" ;;
+ https://api.github.com/repos/mrjoechen/luci-theme-carbon/releases/latest) [ ! -f /tmp/github-fail ] || exit 22; cp /tmp/release.json "$out" ;;
+ https://mrjoechen.github.io/luci-theme-carbon/updates/latest.json) cp /tmp/release.json "$out" ;;
  *) exit 22 ;;
 esac
 ''')
@@ -149,8 +168,16 @@ esac
             self.assertTrue(rpc('check')['started'])
             checked = wait()
             self.assertEqual((checked['current'], checked['latest'], checked['reason']), (same_sdk_ver, self.fullversion, ''), checked)
+            self.assertIn('Checking release from github', checked['log'])
+            self.assertNotIn('Checking release from pages', checked['log'])
             self.assertFalse(checked['can_upgrade'], checked)
             self.assertEqual(rpc('upgrade', dict(version=self.fullversion))['error'], 'stale')
+            shell('touch /tmp/github-fail')
+            self.assertTrue(rpc('check')['started'])
+            checked = wait()
+            self.assertEqual((checked['current'], checked['latest'], checked['reason']), (same_sdk_ver, self.fullversion, ''), checked)
+            self.assertIn('Checking release from pages', checked['log'])
+            self.assertFalse(checked['can_upgrade'], checked)
         finally:
             docker('rm', '-f', c)
 

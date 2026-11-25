@@ -566,11 +566,53 @@ test('simple menu customization supports search multi-select, reordering, cancel
 		await page.waitForSelector('.cb-sheet-group[data-group="common"] .cb-sheet-add');
 		assert.equal(await page.locator('.cb-sheet.cb-sheet-menu').isVisible(), true);
 
-		/* Reorder System Log up & remove Password, verify live sidebar */
-		await page.click('[data-row-key="common:status/syslog"] .cbi-button-up');
+		/* Edit view uses drag handles only (no up/down buttons) */
+		assert.equal(await page.locator('.cb-sheet-menu .cbi-button-up, .cb-sheet-menu .cbi-button-down').count(), 0, 'simple menu edit view has no up/down arrow buttons');
+		assert.equal(await page.locator('.cb-sheet-menu .cb-sheet-row-drag .cb-drag-handle').count(), initial.length + 3, 'every row shows a drag handle');
+
+		/* Helper to perform a smooth mouse drag from one locator to another */
+		const mouseDrag = async (p, fromLoc, toLoc, opts = {}) => {
+			const src = await fromLoc.boundingBox();
+			const dst = await toLoc.boundingBox();
+			const sx = src.x + (opts.fromX != null ? opts.fromX : src.width / 2);
+			const sy = src.y + src.height / 2;
+			const ex = dst.x + dst.width / 2;
+			const ey = dst.y + (opts.before ? 4 : (opts.after ? dst.height - 4 : dst.height / 2));
+			await p.mouse.move(sx, sy);
+			await p.mouse.down();
+			if (opts.holdMs) await p.waitForTimeout(opts.holdMs);
+			await p.mouse.move(sx, sy + (ey > sy ? 8 : -8), { steps: 3 });
+			if (opts.onDragging) await opts.onDragging();
+			await p.mouse.move(ex, ey, { steps: 10 });
+			if (opts.cancelWithEscape) {
+				await p.keyboard.press('Escape');
+				await p.mouse.up();
+				return;
+			}
+			await p.mouse.up();
+			await p.waitForTimeout(60);
+		};
+
+		/* Drag System Log up above Wi-Fi inside Common, then drag it across groups into System; verify live sidebar & dynamic remove */
+		await mouseDrag(page, page.locator('[data-row-key="common:status/syslog"]'), page.locator('[data-row-key="common:network/wireless"]'), { before: true });
+		let edited = await navLabels();
+		assert.equal(edited.indexOf('系统日志') < edited.indexOf('Wi-Fi'), true, 'dragged item moves up in live sidebar: ' + JSON.stringify(edited));
+
+		await mouseDrag(page, page.locator('[data-row-key="common:status/syslog"]'), page.locator('[data-row-key="system:system/admin"]'), { before: true });
+		assert.equal(await page.locator('[data-row-key="system:status/syslog"]').count(), 1, 'cross-group drag updates row key to system');
+		assert.equal(await page.locator('.cb-sheet-group[data-group="system"] .cb-sheet-group-head .cb-sheet-count').textContent(), '5', 'system group count increments on cross-group drag');
+		edited = await navLabels();
+		assert.equal(edited.indexOf('系统日志') > edited.indexOf('Wi-Fi'), true, 'cross-group dragged item moves into System in live sidebar');
+
+		/* Escape during active drawer drag cancels only the drag and keeps drawer open */
+		const beforeEscDrag = await navLabels();
+		await mouseDrag(page, page.locator('[data-row-key="common:network/wireless"]'), page.locator('[data-row-key="common:status/overview"]'), { before: true, cancelWithEscape: true });
+		assert.equal(await page.locator('.cb-sheet.cb-sheet-menu').isVisible(), true, 'Escape during drag keeps drawer open');
+		assert.deepEqual(await navLabels(), beforeEscDrag, 'Escape during drag restores pre-drag order');
+
+		/* Removing an item after dragging still removes the right row */
 		await page.click('[data-row-key="system:system/admin"] .cbi-button-remove');
-		const edited = await navLabels();
-		assert.equal(edited.indexOf('系统日志') < edited.indexOf('Wi-Fi'), true, 'reordered item moves up in live sidebar');
+		edited = await navLabels();
 		assert.equal(edited.includes('管理密码'), false, 'removed item disappears from live sidebar');
 
 		/* Cancel rolls back completely and restores focus to .cb-nav-customize */
@@ -579,7 +621,7 @@ test('simple menu customization supports search multi-select, reordering, cancel
 		assert.deepEqual(await navLabels(), initial, 'cancel restores previous simple menu');
 		assert.equal(await page.evaluate(() => document.activeElement.classList.contains('cb-nav-customize')), true, 'desktop close restores focus to Customize menu button');
 
-		/* Keyboard focus: Back focuses group Add button; IME Escape stays in Picker; keyboard reorder keeps focus in sheet */
+		/* Keyboard focus: Back focuses group Add button; IME Escape stays in Picker */
 		await page.click('.cb-nav-customize');
 		await page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
 		await page.click('.cb-sheet-group[data-group="common"] .cb-sheet-add');
@@ -589,15 +631,69 @@ test('simple menu customization supports search multi-select, reordering, cancel
 		assert.equal(await page.locator('.cb-sheet-search-input').isVisible(), true, 'IME Escape does not exit picker');
 		await page.click('.cb-sheet-back');
 		assert.equal(await page.evaluate(() => document.activeElement.classList.contains('cb-sheet-add')), true, 'Back moves focus to group Add button');
-		await page.focus('[data-row-key="common:network/wireless"] .cbi-button-up');
-		await page.keyboard.press('Enter');
-		assert.equal(await page.evaluate(() => !!document.activeElement.closest('.cb-sheet-body')), true, 'keyboard reorder preserves focus inside drawer');
 		await page.click('.cb-sheet-foot .cbi-button:has-text("取消")');
 		await page.waitForFunction(() => !document.querySelector('.cb-sheet'));
 
-		/* Re-open, add System Log + Connected Devices, remove Reboot, Save & reload */
+		/* Direct Simple sidebar click-and-hold (long-press >280ms) drag-reorder + quick click check */
+		await page.evaluate(() => {
+			window.__navClicks = [];
+			document.getElementById('topmenu').addEventListener('click', (e) => {
+				const a = e.target.closest('.cb-nav-link');
+				if (a) { e.preventDefault(); window.__navClicks.push(a.dataset.menuRel); }
+			});
+		});
+		/* Quick click fires normally */
+		await page.click('#topmenu .cb-nav-link[data-menu-rel="network/wireless"]');
+		assert.deepEqual(await page.evaluate(() => window.__navClicks), ['network/wireless'], 'quick click on sidebar item still triggers navigation');
+
+		/* Long-press drag inside Common + cross-group drag suppresses click, persists across reload */
+		let ghostSeen = false;
+		await mouseDrag(
+			page,
+			page.locator('#topmenu .cb-nav-link[data-menu-rel="network/wireless"]'),
+			page.locator('#topmenu .cb-nav-link[data-menu-rel="status/overview"]'),
+			{
+				holdMs: 360,
+				before: true,
+				onDragging: async () => { ghostSeen = await page.locator('.cb-drag-ghost-nav').isVisible(); }
+			}
+		);
+		assert.equal(ghostSeen, true, 'long-press lifts floating ghost card in sidebar');
+		assert.deepEqual(await page.evaluate(() => window.__navClicks), ['network/wireless'], 'long-press drag suppresses link click');
+		const afterSideDrag = await navLabels();
+		assert.equal(afterSideDrag[0], 'Wi-Fi', 'long-press drag moves Wi-Fi to first slot: ' + JSON.stringify(afterSideDrag));
+
+		/* Cross-group long-press drag: move Reboot from System into Common */
+		await mouseDrag(
+			page,
+			page.locator('#topmenu .cb-nav-link[data-menu-rel="system/reboot"]'),
+			page.locator('#topmenu .cb-nav-link[data-menu-rel="status/overview"]'),
+			{ holdMs: 360, after: true }
+		);
+		assert.deepEqual(await page.evaluate(() => window.__navClicks), ['network/wireless'], 'cross-group long-press drag suppresses link click');
+		const afterCrossSide = await page.$$eval('#topmenu .cb-nav-simple-list[data-menu-group="common"] .cb-nav-link', (els) => els.map((e) => e.dataset.menuRel));
+		assert.ok(afterCrossSide.includes('system/reboot'), 'cross-group sidebar drag moves Reboot into Common: ' + JSON.stringify(afterCrossSide));
+
+		/* Escape during sidebar long-press drag cancels without changing order */
+		const beforeSideEsc = await navLabels();
+		await mouseDrag(
+			page,
+			page.locator('#topmenu .cb-nav-link[data-menu-rel="network/network"]'),
+			page.locator('#topmenu .cb-nav-link[data-menu-rel="network/wireless"]'),
+			{ holdMs: 360, before: true, cancelWithEscape: true }
+		);
+		assert.deepEqual(await navLabels(), beforeSideEsc, 'Escape during sidebar drag restores order');
+
+		/* Reload confirms sidebar long-press order persisted in localStorage */
+		await page.reload();
+		await dashboardReady(page);
+		assert.deepEqual(await navLabels(), beforeSideEsc, 'sidebar long-press drag persists across reload');
+		assert.equal(await page.locator('#topmenu .cb-nav-simple-list[data-menu-group="common"] [data-menu-rel="system/reboot"]').count(), 1);
+
+		/* Re-open customizer, restore default first, then add System Log + Connected Devices, remove Reboot, Save & reload */
 		await page.click('.cb-nav-customize');
 		await page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
+		await page.click('.cb-sheet-foot .cbi-button-reset');
 		await page.click('.cb-sheet-group[data-group="common"] .cb-sheet-add');
 		await page.click('.cb-picker-item[data-path="status/syslog"]');
 		await page.click('.cb-picker-item[data-path="network/dhcp"]');
@@ -751,6 +847,34 @@ test('simple menu customization supports search multi-select, reordering, cancel
 		await uci.page.evaluate(() => window.Carbon.setSimpleMenuAttr('common=services/missing_plugin;system=none'));
 		assert.match(await uci.page.textContent('#topmenu .cb-nav-empty'), /No configured pages are currently installed/);
 		assert.equal(await uci.page.locator('#topmenu .cb-nav-customize').isVisible(), true);
+
+		/* Sidebar long-press drag in UCI mode preserves hidden uninstalled entries and rolls back on denied */
+		await uci.page.evaluate(() => {
+			window.__uciCalls = [];
+			window.__uciDeny = false;
+			window.Carbon.setSimpleMenuAttr('common=status/overview services/openclash network/network;system=system/reboot');
+		});
+		const dragSide = async (fromSel, toSel) => {
+			const src = await uci.page.locator(fromSel).boundingBox();
+			const dst = await uci.page.locator(toSel).boundingBox();
+			await uci.page.mouse.move(src.x + src.width / 2, src.y + src.height / 2);
+			await uci.page.mouse.down();
+			await uci.page.waitForTimeout(360);
+			await uci.page.mouse.move(dst.x + dst.width / 2, dst.y + 4, { steps: 10 });
+			await uci.page.mouse.up();
+			await uci.page.waitForTimeout(80);
+		};
+		await dragSide('#topmenu .cb-nav-link[data-menu-rel="network/network"]', '#topmenu .cb-nav-link[data-menu-rel="status/overview"]');
+		const uciSaved = await uci.page.evaluate(() => window.__uciCalls);
+		assert.equal(uciSaved.length, 1, 'UCI sidebar drag saves once');
+		assert.equal(uciSaved[0][1], 'common=network/network status/overview services/openclash;system=system/reboot', 'UCI sidebar drag preserves hidden uninstalled path');
+
+		/* Permission denied rolls back sidebar order and displays inline .cb-nav-status */
+		await uci.page.evaluate(() => { window.__uciDeny = true; });
+		await dragSide('#topmenu .cb-nav-link[data-menu-rel="status/overview"]', '#topmenu .cb-nav-link[data-menu-rel="network/network"]');
+		await uci.page.waitForSelector('#topmenu .cb-nav-status');
+		assert.match(await uci.page.textContent('#topmenu .cb-nav-status'), /Log out and log in again/);
+		assert.deepEqual(await labels(), ['Internet & Network', 'Overview', 'Reboot'], 'denied UCI sidebar drag rolls back order');
 		assert.deepEqual(uci.errors, []);
 	} finally { await uci.context.close(); }
 

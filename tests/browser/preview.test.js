@@ -6,7 +6,7 @@
  *
  * - tests/navigation.html regression page at phone width
  * - preview pages in zh/en × light/dark × desktop/phone: no script errors,
- *   screenshots written to .cache/screenshots for review
+ *   screenshots written to .cache/screenshots when CARBON_SCREENSHOTS=1
  * - dashboard data (devices, Wi‑Fi, IPv6, sensors, traffic picker)
  * - keyboard / touch / drawer accessibility
  * - the minified release build computes the same styles as the sources
@@ -22,6 +22,12 @@ const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const SHOTS = path.join(ROOT, '.cache', 'screenshots');
+/* Screenshots are only written for local review: CARBON_SCREENSHOTS=1 npm run test:browser */
+async function shot(target, name, opts = {}) {
+	if (!process.env.CARBON_SCREENSHOTS) return;
+	fs.mkdirSync(SHOTS, { recursive: true });
+	await target.screenshot({ path: path.join(SHOTS, name), ...opts });
+}
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
 
 let server, base, browser, minRoot;
@@ -49,7 +55,6 @@ test.before(async () => {
 	await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 	base = 'http://127.0.0.1:' + server.address().port;
 	browser = await chromium.launch({ executablePath: process.env.CARBON_TEST_BROWSER || undefined });
-	fs.mkdirSync(SHOTS, { recursive: true });
 });
 
 test.after(async () => {
@@ -169,7 +174,7 @@ test('device speeds preserve leases, handle missing data and pause when hidden',
 		assert.equal(await page.textContent('.cb-count'), count, 'historical traffic cannot create devices');
 		assert.match(await phone.textContent(), /DHCP lease · 10h 33m left/);
 		assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-		await page.screenshot({ path: path.join(SHOTS, 'device-speeds-phone.png'), fullPage: true });
+		await shot(page, 'device-speeds-phone.png', { fullPage: true });
 		await page.evaluate(() => {
 			Object.defineProperty(document, 'hidden', { configurable: true, value: true });
 			document.dispatchEvent(new Event('visibilitychange'));
@@ -246,7 +251,7 @@ for (const lang of ['zh-Hans', 'en']) {
 					const widths = await page.$$eval('.cb-clients .cb-list-main', (els) => els.map((e) => e.getBoundingClientRect().width));
 					assert.ok(widths.every((w) => w >= 90), 'lease labels and badges leave room for device names: ' + widths);
 				}
-				await page.screenshot({ path: path.join(SHOTS, `overview-${lang}-${appearance}-${device}.png`), fullPage: true });
+				await shot(page, `overview-${lang}-${appearance}-${device}.png`, { fullPage: true });
 				assert.deepEqual(errors, []);
 				await context.close();
 			});
@@ -391,7 +396,7 @@ test('dashboard customization supports presets, multiple traffic panels, Wi-Fi/t
 		await page.waitForSelector('.cb-lb-list.show');
 		await page.keyboard.press('Escape');
 		assert.equal(await page.$('.cb-lb-list'), null);
-		await page.screenshot({ path: path.join(SHOTS, 'custom-drawer-desktop.png') });
+		await shot(page, 'custom-drawer-desktop.png');
 
 		/* Collapse handle straddles the top-left border of the sheet on desktop (mirrors sidebar .cb-collapse) */
 		const deskSheet = await page.locator('.cb-sheet').boundingBox();
@@ -408,7 +413,7 @@ test('dashboard customization supports presets, multiple traffic panels, Wi-Fi/t
 		assert.equal(await page.locator('.cb-traffic').count(), 2, 'live draft stays applied while collapsed');
 		const dockBox = await page.locator('.cb-sheet-dock').boundingBox();
 		assert.ok(dockBox.x >= 0 && dockBox.x + dockBox.width <= 1440 && dockBox.y + dockBox.height <= 1000, 'collapsed dock fits inside desktop viewport');
-		await page.screenshot({ path: path.join(SHOTS, 'custom-collapsed-desktop.png') });
+		await shot(page, 'custom-collapsed-desktop.png');
 
 		await page.click('.cb-sheet-expand');
 		await page.waitForSelector('.cb-sheet.show');
@@ -440,7 +445,7 @@ test('dashboard customization supports presets, multiple traffic panels, Wi-Fi/t
 		await page.waitForSelector('.cb-sheet-dock.show');
 		await page.click('.cb-sheet-dock .cbi-button-save');
 		await page.waitForFunction(() => !document.querySelector('.cb-sheet'));
-		await page.screenshot({ path: path.join(SHOTS, 'custom-multi-desktop.png'), fullPage: true });
+		await shot(page, 'custom-multi-desktop.png', { fullPage: true });
 
 		await page.reload();
 		await page.waitForSelector('.cb-tile-wifi');
@@ -475,7 +480,7 @@ test('dashboard customization supports presets, multiple traffic panels, Wi-Fi/t
 		assert.ok(geom.tiles[2].cls.includes('cb-tile-wide'), 'odd last tile is marked wide');
 		assert.ok(geom.tiles[2].w > geom.tiles[0].w * 1.7, 'odd last tile spans full width on phone: ' + JSON.stringify(geom.tiles));
 		assert.ok(geom.traffics[0] > 300 && geom.traffics[1] > 300, 'stacked traffic charts use full phone width: ' + JSON.stringify(geom.traffics));
-		await phone.page.screenshot({ path: path.join(SHOTS, 'custom-odd-tiles-phone.png'), fullPage: true });
+		await shot(phone.page, 'custom-odd-tiles-phone.png', { fullPage: true });
 
 		await phone.page.click('.cb-customize-btn');
 		await phone.page.waitForSelector('.cb-sheet.show');
@@ -487,7 +492,7 @@ test('dashboard customization supports presets, multiple traffic panels, Wi-Fi/t
 		assert.ok(sheetBox.height <= 844 * 0.9, 'bottom sheet leaves top margin');
 		assert.ok(phoneHandle.y < sheetBox.y && phoneHandle.y + phoneHandle.height > sheetBox.y, 'phone collapse handle straddles top border');
 		assert.ok(saveBox.bottom ? saveBox.bottom <= 844 : saveBox.y + saveBox.height <= 844.5, 'sticky save button stays visible inside phone viewport');
-		await phone.page.screenshot({ path: path.join(SHOTS, 'custom-drawer-phone.png') });
+		await shot(phone.page, 'custom-drawer-phone.png');
 		await phone.page.click('.cb-sheet-collapse');
 		await phone.page.waitForSelector('.cb-sheet-dock.show');
 		await phone.page.waitForTimeout(320);
@@ -495,7 +500,7 @@ test('dashboard customization supports presets, multiple traffic panels, Wi-Fi/t
 		assert.ok(phoneDock.x >= 0 && phoneDock.x + phoneDock.width <= 391 && phoneDock.y + phoneDock.height <= 844.5, 'collapsed dock fits phone viewport');
 		assert.ok(phoneDock.height <= 64, 'collapsed dock buttons stay on a single row on phone: height=' + phoneDock.height);
 		assert.equal(await phone.page.$eval('.cb-app', (e) => e.hasAttribute('inert')), false, 'phone dashboard interactive when collapsed');
-		await phone.page.screenshot({ path: path.join(SHOTS, 'custom-collapsed-phone.png') });
+		await shot(phone.page, 'custom-collapsed-phone.png');
 		await phone.page.click('.cb-sheet-expand');
 		await phone.page.waitForSelector('.cb-sheet.show');
 		await phone.page.keyboard.press('Escape');
@@ -514,7 +519,7 @@ test('dashboard customization supports presets, multiple traffic panels, Wi-Fi/t
 		await dark.page.click('.cb-customize-btn');
 		await dark.page.waitForSelector('.cb-sheet.show');
 		await dark.page.waitForTimeout(300);
-		await dark.page.screenshot({ path: path.join(SHOTS, 'custom-drawer-dark.png') });
+		await shot(dark.page, 'custom-drawer-dark.png');
 		assert.deepEqual(dark.errors, []);
 	} finally { await dark.context.close(); }
 });
@@ -537,7 +542,7 @@ test('simple menu customization supports search multi-select, reordering, cancel
 			scrimLeft: document.querySelector('.cb-sheet-scrim-menu').getBoundingClientRect().left
 		}));
 		assert.ok(geom.scrimLeft >= geom.sideRight - 1, 'desktop menu scrim leaves sidebar unobstructed: ' + JSON.stringify(geom));
-		await page.screenshot({ path: path.join(SHOTS, 'simple-menu-edit-desktop.png') });
+		await shot(page, 'simple-menu-edit-desktop.png');
 
 		/* Open Add-page picker for Common */
 		await page.click('.cb-sheet-group[data-group="common"] .cb-sheet-add');
@@ -559,7 +564,7 @@ test('simple menu customization supports search multi-select, reordering, cancel
 		await page.click('.cb-sheet-search-clear');
 		await page.click('.cb-picker-item[data-path="network/dhcp"]');
 		await page.click('.cb-picker-item[data-path="network/diagnostics"]');
-		await page.screenshot({ path: path.join(SHOTS, 'simple-menu-picker-desktop.png') });
+		await shot(page, 'simple-menu-picker-desktop.png');
 
 		/* Escape returns from picker to edit view without closing sheet */
 		await page.keyboard.press('Escape');
@@ -735,7 +740,7 @@ test('simple menu customization supports search multi-select, reordering, cancel
 		await dark.page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
 		await dark.page.waitForTimeout(300);
 		assert.match(await dark.page.locator('[data-row-key="common:services/openclash"]').textContent(), /Not installed/);
-		await dark.page.screenshot({ path: path.join(SHOTS, 'simple-menu-drawer-dark.png') });
+		await shot(dark.page, 'simple-menu-drawer-dark.png');
 		await dark.page.click('[data-row-key="common:services/openclash"] .cbi-button-remove');
 		assert.equal(await dark.page.locator('[data-row-key="common:status/overview"] .cbi-button-remove').isDisabled(), true, 'cannot remove the last remaining menu item');
 		assert.deepEqual(dark.errors, []);
@@ -756,7 +761,7 @@ test('simple menu customization supports search multi-select, reordering, cancel
 		assert.ok(sheetBox.x >= 0 && sheetBox.x + sheetBox.width <= 391, 'phone bottom sheet stays within viewport');
 		assert.ok(saveBox.y + saveBox.height <= 844.5, 'save button stays visible on phone');
 		assert.equal(await phone.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no horizontal overflow on phone');
-		await phone.page.screenshot({ path: path.join(SHOTS, 'simple-menu-drawer-phone.png') });
+		await shot(phone.page, 'simple-menu-drawer-phone.png');
 		await phone.page.click('.cb-sheet-group[data-group="common"] .cb-sheet-add');
 		await phone.page.click('.cb-picker-item[data-path="status/syslog"]');
 		await phone.page.click('.cb-sheet-foot .cbi-button-save');
@@ -1015,7 +1020,7 @@ test('dashboard clarifies load average status and shows multi-SSID wireless band
 		assert.deepEqual(tile.wirelessClients, ['1 台设备', '2 台设备', '3 台设备', '0 台设备']);
 		assert.equal(tile.tileOverflow, false, 'long SSID truncates inside 390px half-width Wi-Fi tile without overflow');
 		assert.equal(tile.overflow, false, '4-SSID Wi-Fi tile and wireless card fit 390px phone without overflow');
-		await page.screenshot({ path: path.join(SHOTS, 'multi-ssid-phone.png'), fullPage: true });
+		await shot(page, 'multi-ssid-phone.png', { fullPage: true });
 		assert.deepEqual(errors, []);
 	} finally { await multi.close(); }
 
@@ -1133,7 +1138,7 @@ test('bundled catalogues translate the shell and fit the sidebar', async () => {
 		assert.deepEqual(r.navClipped, [], `${code}: menu labels fit or ellipsize`);
 		assert.deepEqual(errors, [], code);
 		if (code === 'de' || code === 'ja')
-			await page.screenshot({ path: path.join(SHOTS, `overview-${code}-light-desktop.png`), fullPage: true });
+			await shot(page, `overview-${code}-light-desktop.png`, { fullPage: true });
 		await context.close();
 	}
 });
@@ -1289,7 +1294,7 @@ test('table dropdown options escape the last row and remain clickable', async ()
 						await page.locator('ul.dropdown > li[data-value="/dev/sdb1"]').click({ timeout: 2000 });
 						assert.equal(await page.locator('#mount-device').getAttribute('data-clicked'), '/dev/sdb1', label);
 						if (mount === 'src' && tag === 'table')
-							await page.screenshot({ path: path.join(SHOTS, `diskman-dropdown-${appearance}-${width}.png`) });
+							await shot(page, `diskman-dropdown-${appearance}-${width}.png`);
 						await page.locator('#mount-device').evaluate((sb) => {
 							sb.querySelector('.preview').remove();
 							sb.removeAttribute('open');
@@ -1612,6 +1617,8 @@ test('button variants stay consistent across <button> and <input> elements, dest
 						<button id="pa-save-after-neg" class="cbi-button cbi-button-save">保存</button>
 					</div>
 					</div></main></body></html>`, { waitUntil: 'load' });
+				/* setContent can resolve before the linked stylesheet is applied (flaky black text in min/dark) */
+				await page.waitForFunction(() => { const l = document.querySelector('link[rel="stylesheet"]'); return l && l.sheet && l.sheet.cssRules.length > 0; });
 
 				const readStyles = (ids) => page.evaluate((list) => Object.fromEntries(list.map((id) => {
 					const cs = getComputedStyle(document.getElementById(id));
@@ -1671,7 +1678,7 @@ test('button variants stay consistent across <button> and <input> elements, dest
 				assert.deepEqual(st['pa-save-after-apply'], st['btn-base'], `${label}: Save after Apply stays secondary chip`);
 				assert.deepEqual(st['pa-save-after-neg'], st['btn-base'], `${label}: Save after Apply-unchecked stays secondary chip`);
 				if (mount === 'src')
-					await page.screenshot({ path: path.join(SHOTS, `button-variants-${appearance}.png`), fullPage: true });
+					await shot(page, `button-variants-${appearance}.png`, { fullPage: true });
 
 				/* Hover states: <input> variants keep their semantic hover color; solid danger never turns indigo */
 				const hoverStyle = async (id) => {
@@ -1879,7 +1886,7 @@ test('settings page: buttons, links, fields and status text share one centre lin
 		});
 		assert.deepEqual(notes.tags, ['h2', 'h3', 'ul', 'li', 'strong', 'table', 'pre', 'code']);
 		assert.ok(notes.links && notes.fits);
-		if (width === 1200) await page.screenshot({ path: path.join(SHOTS, 'settings-release-notes.png'), fullPage: true });
+		if (width === 1200) await shot(page, 'settings-release-notes.png', { fullPage: true });
 		rows.forEach((r) => assert.ok(r.spread <= 0.5, `${width}px ${r.row}: ${r.spread}px off centre`));
 		assert.deepEqual(errors, []);
 		await context.close();
@@ -1925,7 +1932,7 @@ test('settings page: the mirror explanation lives in a ? toggletip', async () =>
 			await page.mouse.move(5, 5);
 			await btn.hover();
 			await page.waitForTimeout(200);
-			await section.screenshot({ path: path.join(SHOTS, 'settings-mirror-hint.png') });
+			await shot(section, 'settings-mirror-hint.png');
 		}
 		assert.deepEqual(errors, []);
 		await context.close();

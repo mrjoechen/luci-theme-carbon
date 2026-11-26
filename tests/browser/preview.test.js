@@ -1551,6 +1551,14 @@ test('button variants stay consistent across <button> and <input> elements, dest
 			const label = `${mount}/${appearance}`;
 			const { page, context, errors } = await open('/src/preview/form.html', { width: 1280, height: 900, appearance });
 			try {
+				/* Exercise late CSS: compute the browser defaults before releasing the stylesheet. */
+				await page.route('**/carbon.css', async (route) => {
+					await page.waitForFunction(() => {
+						const button = document.getElementById('btn-remove');
+						return button && getComputedStyle(button).color;
+					}, null, { polling: 10 });
+					await route.continue();
+				}, { times: 1 });
 				await page.setContent(`<!doctype html><html data-darkmode="${appearance === 'dark'}"><head><meta charset="utf-8">
 					<link rel="icon" href="data:,">
 					<link rel="stylesheet" href="/${mount}/htdocs/luci-static/carbon/carbon.css">
@@ -1617,13 +1625,17 @@ test('button variants stay consistent across <button> and <input> elements, dest
 						<button id="pa-save-after-neg" class="cbi-button cbi-button-save">保存</button>
 					</div>
 					</div></main></body></html>`, { waitUntil: 'load' });
-				/* setContent can resolve before the linked stylesheet is applied (flaky black text in min/dark) */
 				await page.waitForFunction(() => { const l = document.querySelector('link[rel="stylesheet"]'); return l && l.sheet && l.sheet.cssRules.length > 0; });
 
-				const readStyles = (ids) => page.evaluate((list) => Object.fromEntries(list.map((id) => {
-					const cs = getComputedStyle(document.getElementById(id));
-					return [id, { bg: cs.backgroundColor, fg: cs.color, shadow: cs.boxShadow }];
-				})), ids);
+				const readStyles = (ids) => page.evaluate(async (list) => {
+					const elements = list.map((id) => document.getElementById(id));
+					/* Loaded CSS can start transitions from browser defaults; read their final values. */
+					await Promise.all(elements.flatMap((el) => el.getAnimations().map((a) => a.finished)));
+					return Object.fromEntries(elements.map((el) => {
+						const cs = getComputedStyle(el);
+						return [el.id, { bg: cs.backgroundColor, fg: cs.color, shadow: cs.boxShadow }];
+					}));
+				}, ids);
 
 				const ids = [
 					'btn-base', 'btn-neutral', 'btn-toggle', 'btn-iface-down', 'btn-add', 'btn-action',
@@ -1683,7 +1695,6 @@ test('button variants stay consistent across <button> and <input> elements, dest
 				/* Hover states: <input> variants keep their semantic hover color; solid danger never turns indigo */
 				const hoverStyle = async (id) => {
 					await page.hover('#' + id);
-					await page.evaluate((elId) => Promise.all(document.getElementById(elId).getAnimations().map((a) => a.finished)), id);
 					return (await readStyles([id]))[id];
 				};
 
@@ -1709,7 +1720,6 @@ test('button variants stay consistent across <button> and <input> elements, dest
 
 				/* Clicking <input type="button"> does not trigger text-input focus ring (parity with <button>) */
 				await page.click('#inp-apply');
-				await page.evaluate(() => Promise.all(document.getElementById('inp-apply').getAnimations().map((a) => a.finished)));
 				const clickedApply = (await readStyles(['inp-apply']))['inp-apply'];
 				assert.equal(clickedApply.shadow, st['btn-primary'].shadow, `${label}: mouse-clicking <input type="submit"> keeps button shadow`);
 

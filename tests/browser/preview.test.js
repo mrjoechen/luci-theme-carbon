@@ -1018,6 +1018,97 @@ test('dashboard clarifies load average status and shows multi-SSID wireless band
 		await page.screenshot({ path: path.join(SHOTS, 'multi-ssid-phone.png'), fullPage: true });
 		assert.deepEqual(errors, []);
 	} finally { await multi.close(); }
+
+	/* 4. Issue #15 regression: failed wireless RPC shows Unavailable (never No wireless), and N1 iwinfo/disabled='0' renders active 5 GHz AP */
+	const deniedCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+	await deniedCtx.addInitScript(() => {
+		localStorage.setItem('carbon.dashboard', 'hero=0;sections=tiles details monitor;monitor=resources;tiles=wifi;details=wireless');
+	});
+	const deniedPage = await deniedCtx.newPage();
+	const deniedErrors = [];
+	deniedPage.on('pageerror', (e) => deniedErrors.push(e.message));
+	try {
+		await deniedPage.route('**/preview/mock.js', (route) => route.fulfill({
+			contentType: 'text/javascript',
+			body: mock + '\n(' + (() => {
+				const origMount = window.Carbon.Dashboard.mount.bind(window.Carbon.Dashboard);
+				window.Carbon.Dashboard.mount = (host, provider, opts) => origMount(host, provider, Object.assign({}, opts, {
+					urls: Object.assign({}, opts && opts.urls, { wireless: null })
+				}));
+				window.CarbonPreview.provider.wireless = async () => { throw new Error('Access denied'); };
+			}).toString() + ')();'
+		}));
+		await deniedPage.goto(base + '/src/preview/index.html?lang=zh-Hans');
+		await deniedPage.waitForFunction(() => document.querySelector('.cb-tile-wifi .cb-tile-sub')?.textContent === '无法读取');
+		assert.equal(await deniedPage.textContent('.cb-tile-wifi .cb-tile-val'), '—');
+		assert.equal(await deniedPage.textContent('.cb-tile-wifi .cb-tile-sub'), '无法读取');
+		assert.deepEqual(deniedErrors, []);
+	} finally { await deniedCtx.close(); }
+
+	const n1Ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+	await n1Ctx.addInitScript(() => {
+		localStorage.setItem('carbon.dashboard', 'hero=0;sections=tiles details monitor;monitor=resources;tiles=wifi;details=wireless');
+	});
+	const n1Page = await n1Ctx.newPage();
+	const n1Errors = [];
+	n1Page.on('pageerror', (e) => n1Errors.push(e.message));
+	try {
+		await n1Page.route('**/preview/mock.js', (route) => route.fulfill({
+			contentType: 'text/javascript',
+			body: mock + '\n(' + (() => {
+				window.CarbonPreview.provider.wireless = async () => ({
+					radio0: {
+						up: true,
+						config: { type: 'mac80211', channel: 'auto', disabled: '0' },
+						iwinfo: { channel: 36, frequency: 5180, country: 'CN' },
+						interfaces: [{
+							ifname: 'wlan0',
+							config: { mode: 'ap', disabled: '0' },
+							iwinfo: {
+								ssid: 'n1_5G', mode: 'Master', channel: 36, frequency: 5180,
+								encryption: { enabled: 1, wpa: [2], authentication: ['psk'], ciphers: ['ccmp'] }
+							}
+						}]
+					}
+				});
+				window.CarbonPreview.provider.stations = async (ifnames) => ifnames.includes('wlan0') ? [
+					{ ifname: 'wlan0', mac: 'aa:bb:cc:dd:ee:01', signal: -50 }
+				] : [];
+			}).toString() + ')();'
+		}));
+		await n1Page.goto(base + '/src/preview/index.html?lang=zh-Hans');
+		await n1Page.waitForFunction(() => document.querySelector('.cb-tile-wifi .cb-tile-val')?.textContent === '1');
+		assert.equal(await n1Page.textContent('.cb-tile-wifi .cb-wifi-row-ssid'), 'n1_5G');
+		assert.equal(await n1Page.textContent('.cb-tile-wifi .cb-wifi-row-band'), '5 GHz');
+		assert.equal(await n1Page.textContent('.cb-wireless .cb-wifi-ssid'), 'n1_5G');
+		assert.equal(await n1Page.textContent('.cb-wireless .cb-list-sub'), 'CH 36 · WPA2');
+		assert.equal(await n1Page.textContent('.cb-wireless .cb-wifi-clients'), '1 台设备');
+		assert.deepEqual(n1Errors, []);
+	} finally { await n1Ctx.close(); }
+
+	/* 5. Disabled radio (netifd omits interfaces when disabled=true): shows Off + band, never No wireless */
+	const offCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+	await offCtx.addInitScript(() => {
+		localStorage.setItem('carbon.dashboard', 'hero=0;sections=tiles details monitor;monitor=resources;tiles=wifi;details=wireless');
+	});
+	const offPage = await offCtx.newPage();
+	const offErrors = [];
+	offPage.on('pageerror', (e) => offErrors.push(e.message));
+	try {
+		await offPage.route('**/preview/mock.js', (route) => route.fulfill({
+			contentType: 'text/javascript',
+			body: mock + '\n(' + (() => {
+				window.CarbonPreview.provider.wireless = async () => ({
+					radio0: { up: false, disabled: true, config: { band: '5g', disabled: '1' }, interfaces: [] }
+				});
+			}).toString() + ')();'
+		}));
+		await offPage.goto(base + '/src/preview/index.html?lang=zh-Hans');
+		await offPage.waitForFunction(() => document.querySelector('.cb-tile-wifi .cb-tile-val')?.textContent === '已关闭');
+		assert.equal(await offPage.textContent('.cb-tile-wifi .cb-tile-sub'), '5 GHz');
+		assert.equal(await offPage.textContent('.cb-wireless .cb-empty'), '已关闭');
+		assert.deepEqual(offErrors, []);
+	} finally { await offCtx.close(); }
 });
 
 /* every bundled catalogue loads, translates the shell and fits the sidebar */

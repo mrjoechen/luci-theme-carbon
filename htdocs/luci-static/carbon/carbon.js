@@ -2541,7 +2541,7 @@
 	 *   netDevices()       → luci-rpc getNetworkDevices, keyed by name (optional;
 	 *                        lists physical ports such as pon0 in the traffic picker)
 	 *   leases()           → luci-rpc getDHCPLeases
-	 *   wireless()         → ubus network.wireless status
+	 *   wireless()         → luci-rpc getWirelessDevices or ubus network.wireless status
 	 *   stations(ifnames)  → [{ ifname, mac, signal }] from iwinfo assoclist (optional)
 	 *   neighbors()        → contents of /proc/net/arp (optional)
 	 *   deviceTraffic()    → { interval: seconds, columns, data } from an existing
@@ -2574,36 +2574,77 @@
 	};
 
 	const BAND_LABEL = Object.assign(Object.create(null), { '2g': '2.4 GHz', '5g': '5 GHz', '6g': '6 GHz', '60g': '60 GHz' });
-	function radioBandInfo(cfg) {
+	function isDisabled(v) {
+		return v === true || v === 1 || v === '1' || v === 'true';
+	}
+	function isApMode(ic, iw, on) {
+		const mode = String((ic && ic.mode) || '').trim().toLowerCase();
+		if (mode) return /^(?:ap(?:[-_]wds)?|master)$/.test(mode);
+		if (on && iw && iw.mode) return /^(?:master\b|unknown$)/i.test(String(iw.mode).trim());
+		return true;
+	}
+	function bandFromFreq(freq) {
+		const f = Number(freq);
+		if (!Number.isFinite(f) || f <= 0) return null;
+		if (f >= 57000) return '60g';
+		if (f >= 5925 && f <= 7125) return '6g';
+		if (f >= 4900 && f < 5925) return '5g';
+		if (f >= 2400 && f <= 2500) return '2g';
+		return null;
+	}
+	function bandFromHwmode(hwmode) {
+		const hw = String(hwmode || '').trim();
+		if (!hw) return null;
+		if (/ad/i.test(hw)) return '60g';
+		if (/[bg]/i.test(hw)) return '2g';
+		if (/^(?:11)?(?:a|na|ac|axa)$/i.test(hw)) return '5g';
+		return null;
+	}
+	function radioBandInfo(cfg, iw) {
 		cfg = cfg || {};
 		const band = String(cfg.band || '').toLowerCase();
 		if (band && BAND_LABEL[band]) return { key: band, label: BAND_LABEL[band] };
-		if (cfg.hwmode) {
-			const key = /a/.test(cfg.hwmode) ? '5g' : '2g';
-			return { key: key, label: BAND_LABEL[key] };
-		}
-		const ch = parseInt(cfg.channel, 10);
+		const fk = iw ? bandFromFreq(iw.frequency) : null;
+		if (fk) return { key: fk, label: BAND_LABEL[fk] };
+		const hk = bandFromHwmode(cfg.hwmode);
+		if (hk) return { key: hk, label: BAND_LABEL[hk] };
+		const rawCh = cfg.channel && cfg.channel !== 'auto' && String(cfg.channel) !== '0' ? cfg.channel : (iw && iw.channel);
+		const ch = parseInt(rawCh, 10);
 		if (ch >= 1 && ch <= 14) return { key: '2g', label: '2.4 GHz' };
 		if (ch >= 32 && ch <= 177) return { key: '5g', label: '5 GHz' };
 		return { key: '', label: null };
 	}
-	function radioBand(cfg) {
-		return radioBandInfo(cfg).label;
+	function radioBand(cfg, iw) {
+		return radioBandInfo(cfg, iw).label;
 	}
 	function wirelessWidth(htmode) {
 		const m = String(htmode || '').trim().match(/(?:^|\D)(80\+80|320|160|80|40|20)[+-]?$/);
 		return m ? m[1] + ' MHz' : null;
 	}
-	function wirelessEncryption(enc) {
+	function wirelessEncryption(enc, iwEnc) {
 		const raw = String(enc || '').trim().toLowerCase();
-		if (!raw || raw === 'none') return null;
-		if (/^sae-mixed\b/.test(raw)) return 'WPA2/WPA3';
-		if (/^sae\b/.test(raw)) return 'WPA3';
-		if (/^psk-mixed\b/.test(raw)) return 'WPA/WPA2';
-		if (/^psk2\b/.test(raw)) return 'WPA2';
-		if (/^psk\b/.test(raw)) return 'WPA';
-		if (/^owe\b/.test(raw)) return 'OWE';
-		return raw.toUpperCase();
+		if (raw === 'none') return null;
+		if (raw) {
+			if (/^sae-mixed\b/.test(raw)) return 'WPA2/WPA3';
+			if (/^sae\b/.test(raw)) return 'WPA3';
+			if (/^psk-mixed\b/.test(raw)) return 'WPA/WPA2';
+			if (/^psk2\b/.test(raw)) return 'WPA2';
+			if (/^psk\b/.test(raw)) return 'WPA';
+			if (/^owe\b/.test(raw)) return 'OWE';
+			return raw.toUpperCase();
+		}
+		if (iwEnc && typeof iwEnc === 'object' && iwEnc.enabled) {
+			const auth = Array.isArray(iwEnc.authentication) ? iwEnc.authentication.map((s) => String(s).toLowerCase()) : [];
+			const wpa = Array.isArray(iwEnc.wpa) ? iwEnc.wpa : [];
+			if (auth.indexOf('owe') >= 0) return 'OWE';
+			if ((wpa.indexOf(2) >= 0 && wpa.indexOf(3) >= 0) || (auth.indexOf('psk') >= 0 && auth.indexOf('sae') >= 0)) return 'WPA2/WPA3';
+			if (wpa.indexOf(3) >= 0 || auth.indexOf('sae') >= 0) return 'WPA3';
+			if (wpa.indexOf(1) >= 0 && wpa.indexOf(2) >= 0) return 'WPA/WPA2';
+			if (wpa.indexOf(2) >= 0) return 'WPA2';
+			if (wpa.indexOf(1) >= 0) return 'WPA';
+			if (Array.isArray(iwEnc.wep) && iwEnc.wep.length) return 'WEP';
+		}
+		return null;
 	}
 
 	C.wirelessSummary = function (w, stations) {
@@ -2623,19 +2664,22 @@
 		const rows = [];
 		if (w && typeof w === 'object') {
 			Object.keys(w).sort().forEach((radio) => {
-				const r = w[radio] || {}, cfg = r.config || {};
-				const b = radioBandInfo(cfg);
-				const channel = cfg.channel && cfg.channel !== 'auto' ? String(cfg.channel) : null;
+				const r = w[radio] || {}, cfg = r.config || {}, riw = r.iwinfo || null;
+				const cfgCh = cfg.channel && cfg.channel !== 'auto' && String(cfg.channel) !== '0' ? String(cfg.channel) : null;
 				const width = wirelessWidth(cfg.htmode);
 				(r.interfaces || []).forEach((i) => {
-					const ic = i.config || {};
-					if (ic.mode && ic.mode !== 'ap') return;
-					const ssid = ic.ssid ? String(ic.ssid) : '';
-					const encryption = wirelessEncryption(ic.encryption);
+					const ic = i.config || {}, iw = i.iwinfo || null;
+					const on = !!r.up && !isDisabled(r.disabled) && !isDisabled(ic.disabled) && !isDisabled(cfg.disabled);
+					if (!isApMode(ic, iw, on)) return;
+					const b = radioBandInfo(cfg, iw || riw);
+					const liveCh = on && (iw || riw) && Number((iw || riw).channel) > 0 ? String((iw || riw).channel) : null;
+					const channel = cfgCh || liveCh;
+					const rawSsid = ic.ssid != null && ic.ssid !== '' ? ic.ssid : (iw && iw.ssid ? iw.ssid : '');
+					const ssid = rawSsid ? String(rawSsid) : '';
+					const encryption = wirelessEncryption(ic.encryption, iw && iw.encryption);
 					const meta = [channel ? 'CH ' + channel : null, width, encryption].filter(Boolean).join(' · ');
 					const sub = [b.label, meta].filter(Boolean).join(' · ');
-					const on = !!r.up && !r.disabled && !ic.disabled && !cfg.disabled;
-					const ifname = i.ifname || '';
+					const ifname = i.ifname || (iw && iw.ifname) || '';
 					let clients = null;
 					if (on && ifname && hasStations) {
 						const set = perIf.get(ifname);
@@ -2657,13 +2701,14 @@
 	function apInterfaces(w) {
 		const out = { ifnames: [], bands: {} };
 		Object.keys(w || {}).forEach((radio) => {
-			const r = w[radio] || {}, cfg = r.config || {};
-			if (!r.up || r.disabled || cfg.disabled) return;
+			const r = w[radio] || {}, cfg = r.config || {}, riw = r.iwinfo || null;
+			if (!r.up || isDisabled(r.disabled) || isDisabled(cfg.disabled)) return;
 			(r.interfaces || []).forEach((i) => {
-				const ic = i.config || {};
-				if (!i.ifname || ic.disabled || (ic.mode && ic.mode !== 'ap')) return;
-				out.ifnames.push(i.ifname);
-				out.bands[i.ifname] = radioBand(cfg);
+				const ic = i.config || {}, iw = i.iwinfo || null;
+				const ifname = i.ifname || (iw && iw.ifname) || '';
+				if (!ifname || isDisabled(ic.disabled) || !isApMode(ic, iw, true)) return;
+				out.ifnames.push(ifname);
+				out.bands[ifname] = radioBand(cfg, iw || riw);
 			});
 		});
 		return out;
@@ -3784,7 +3829,7 @@
 				if (view.wireless && !st.noRadio) {
 					view.wireless.count.textContent = (active.length && total != null) ? String(total) : '';
 					view.wireless.list.innerHTML = '';
-					if (!rows.length) view.wireless.list.appendChild(h('li', { class: 'cb-empty', text: w ? t('No wireless') : t('Unavailable') }));
+					if (!rows.length) view.wireless.list.appendChild(h('li', { class: 'cb-empty', text: w ? t('Off') : t('Unavailable') }));
 					else rows.forEach((x) => {
 						const name = x.ssid || t('Hidden network');
 						const head = h('span', { class: 'cb-list-title cb-wifi-head' }, [
@@ -3807,20 +3852,25 @@
 				}
 				if (view.tiles.wifi) {
 					const tw = view.tiles.wifi;
-					if (st.noRadio) {
-						tw.val.textContent = '—';
-						tw.sub.textContent = t('No wireless');
-						tw.el.title = '';
-					}
-					else if (!w) {
+					if (!w) {
 						tw.val.textContent = '—';
 						tw.sub.textContent = t('Unavailable');
 						tw.el.title = '';
 					}
+					else if (st.noRadio) {
+						tw.val.textContent = '—';
+						tw.sub.textContent = t('No wireless');
+						tw.el.title = '';
+					}
 					else {
 						if (!active.length) {
+							const radioBands = [];
+							Object.keys(w).sort().forEach((k) => {
+								const r = w[k] || {}, b = radioBand(r.config, r.iwinfo);
+								if (b && radioBands.indexOf(b) < 0) radioBands.push(b);
+							});
 							tw.val.textContent = t('Off');
-							tw.sub.textContent = rows.length ? rows.map((x) => x.ssid || t('Hidden network')).slice(0, 2).join(' · ') : t('No wireless');
+							tw.sub.textContent = rows.length ? rows.map((x) => x.ssid || t('Hidden network')).slice(0, 2).join(' · ') : radioBands.slice(0, 2).join(' · ');
 						}
 						else {
 							tw.val.textContent = total != null ? String(total) : t('On');
